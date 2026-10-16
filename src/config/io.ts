@@ -7,19 +7,42 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
-import { applyEdits, modify } from "jsonc-parser";
+import { applyEdits, modify, parse, type ParseError } from "jsonc-parser";
 import { isPlainObject as isRecord } from "es-toolkit/predicate";
-import { configPaths, parseConfig } from "@sn0wo2/oc-utils";
 
 import type { OpenCodeConfig } from "./types.ts";
 import { log } from "./log.ts";
 
 export function defaultConfigPath(): string {
-  const candidates = configPaths();
+  const globalDirectory =
+    process.env.OPENCODE_CONFIG_DIR?.trim() ||
+    join(
+      process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"),
+      "opencode",
+    );
+  const candidates = ["opencode.json", "opencode.jsonc"].map((name) =>
+    join(globalDirectory, name),
+  );
   return (
     candidates.filter((path) => existsSync(path)).at(-1) ?? candidates.at(-1)!
   );
+}
+
+function parseConfig(
+  text: string,
+  source = "OpenCode config",
+): Record<string, unknown> {
+  const errors: ParseError[] = [];
+  const config: unknown = parse(text, errors, { allowTrailingComma: true });
+  const first = errors[0];
+  if (first)
+    throw new SyntaxError(
+      `${source}: JSONC syntax error near offset ${first.offset} (code ${first.error})`,
+    );
+  if (!isRecord(config)) throw new TypeError(`${source} must be an object`);
+  return config;
 }
 
 export function loadConfig(configPath: string): OpenCodeConfig {
