@@ -83,12 +83,6 @@ export function loadConfig(configPath: string): OpenCodeConfig {
   return document as OpenCodeConfig;
 }
 
-const FORMAT_OPTIONS = {
-  insertSpaces: true,
-  tabSize: 2,
-  eol: "\n",
-} as const;
-
 export function saveConfig(configPath: string, config: OpenCodeConfig): void {
   const original = existsSync(configPath)
     ? readFileSync(configPath, "utf8")
@@ -101,23 +95,16 @@ export function saveConfig(configPath: string, config: OpenCodeConfig): void {
       ...Object.keys(previous),
       ...Object.keys(config),
     ])) {
-      if (!(key in config)) {
-        text = applyEdits(
-          text,
-          modify(text, [key], undefined, {
-            formattingOptions: FORMAT_OPTIONS,
-          }),
-        );
-      } else if (
-        JSON.stringify(previous[key]) !== JSON.stringify(config[key])
-      ) {
-        text = applyEdits(
-          text,
-          modify(text, [key], config[key], {
-            formattingOptions: FORMAT_OPTIONS,
-          }),
-        );
-      }
+      const exists = key in config;
+      const value = exists ? config[key] : undefined;
+      if (exists && JSON.stringify(previous[key]) === JSON.stringify(value))
+        continue;
+      text = applyEdits(
+        text,
+        modify(text, [key], value, {
+          formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
+        }),
+      );
     }
   }
   const temporary = join(dirname(configPath), `.tmp-${randomUUID()}`);

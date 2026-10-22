@@ -6,14 +6,7 @@ import { FORMAT_KEYS, type FormatKey } from "./provider/formats.ts";
 import { ModelSync } from "./provider/sync.ts";
 import { AgentAssigner } from "./agent/assign.ts";
 
-function splitList(value: unknown): string[] | undefined {
-  if (typeof value !== "string") return undefined;
-  const items = value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-  return items.length ? items : undefined;
-}
+import { parsePositiveInteger, splitList } from "./utils/input.ts";
 
 async function main(): Promise<void> {
   const {
@@ -29,6 +22,7 @@ async function main(): Promise<void> {
       "base-url": { type: "string" },
       "api-key": { type: "string" },
       models: { type: "string" },
+      context: { type: "string" },
       providers: { type: "string" },
       variant: { type: "string", multiple: true },
       "dry-run": { type: "boolean" },
@@ -39,10 +33,11 @@ async function main(): Promise<void> {
     console.log(`Usage: bun run cli <command> [options]
 
 Provider commands:
-  add <name> --format <key> [--base-url <url>] [--api-key <key>] [--models <a,b,...>]
+  add <name> --format <key> [--base-url <url>] [--api-key <key>] [--models <a,b,...>] [--context <tokens>]
       add a provider from an API endpoint (all discovered models by default)
-  sync [<name>...] [--models <a,b,...>]
+  sync [<name>...] [--models <a,b,...>] [--context <tokens>]
       re-sync API model lists (all providers when no name given)
+      --context applies to all selected models
   remove <name>
       remove a provider from the config
   list
@@ -65,28 +60,32 @@ Options:
     const name = positional[0];
     if (!name) throw new TypeError("add requires a provider name");
     const formatValue = flags.format;
-    if (typeof formatValue !== "string" || !formatValue)
-      throw new TypeError("missing required option: --format");
+    if (!formatValue) throw new TypeError("missing required option: --format");
     if (!(FORMAT_KEYS as readonly string[]).includes(formatValue))
       throw new TypeError(
         `unknown format: ${formatValue} (valid: ${FORMAT_KEYS.join(", ")})`,
       );
-    const format = formatValue as FormatKey;
     const baseURL = flags["base-url"] || undefined;
     const apiKey = flags["api-key"] || undefined;
     await new ModelSync(configPath).addProvider(
       name,
-      format,
+      formatValue as FormatKey,
       {
         ...(baseURL ? { baseURL } : {}),
         ...(apiKey ? { apiKey } : {}),
       },
       splitList(flags.models),
+      flags.context !== undefined
+        ? parsePositiveInteger(flags.context, "--context")
+        : undefined,
     );
   } else if (command === "sync") {
     await new ModelSync(configPath).syncProviders(
       positional,
       splitList(flags.models),
+      flags.context !== undefined
+        ? parsePositiveInteger(flags.context, "--context")
+        : undefined,
     );
   } else if (command === "remove") {
     const name = positional[0];
@@ -105,12 +104,9 @@ Options:
       const dryRun = flags["dry-run"] === true;
       const config = loadConfig(configPath);
       const assigner = new AgentAssigner(config);
-      const providerNames = splitList(flags.providers) ?? [
-        ...assigner.scorer.providers.keys(),
-      ];
-      const models = providerNames.flatMap(
-        (name) => assigner.scorer.providers.get(name) ?? [],
-      );
+      const models = (
+        splitList(flags.providers) ?? [...assigner.scorer.providers.keys()]
+      ).flatMap((name) => assigner.scorer.providers.get(name) ?? []);
       if (!models.length) throw new TypeError("no models found for selection");
       const overrides: Record<string, string> = {};
       for (const value of flags.variant ?? []) {
@@ -147,8 +143,7 @@ Options:
           throw new TypeError(
             `expected <agent>=<provider/model[#variant]>, got: ${entry}`,
           );
-        const { model, variant } = parseReference(reference);
-        patch[agent] = { model, variant };
+        patch[agent] = parseReference(reference);
       }
       log.header(dryRun ? "assign set (dry run)" : "assign set");
       for (const [agent, { model, variant }] of Object.entries(patch))

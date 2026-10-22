@@ -1,3 +1,4 @@
+import { maxBy, minBy, uniqBy } from "es-toolkit/array";
 import { log } from "../config/log.ts";
 import type { OpenCodeConfig } from "../config/types.ts";
 import {
@@ -42,6 +43,9 @@ export const AGENTS = {
   oracle: { zone: "high", role: "strong" },
 } as const satisfies Record<string, { zone: Zone; role: Role }>;
 export type AgentName = keyof typeof AGENTS;
+const AGENT_NAMES = Object.keys(AGENTS).toSorted((a, b) =>
+  a.localeCompare(b),
+) as AgentName[];
 
 const MODEL_ZONES = [
   "high",
@@ -72,18 +76,10 @@ export class AgentAssigner {
     if (names.includes(level)) return level;
     const target = VARIANT_STRENGTH.get(level);
     if (target === undefined) return undefined;
-    const candidates = names.flatMap((name): [number, string][] => {
-      const strength = VARIANT_STRENGTH.get(name);
-      return strength === undefined ? [] : [[strength, name]];
-    });
-    if (!candidates.length) return undefined;
-    const [, best] = candidates.reduce(
-      ([bestStrength, bestName], [strength, name]) =>
-        Math.abs(strength - target) < Math.abs(bestStrength - target)
-          ? [strength, name]
-          : [bestStrength, bestName],
+    return minBy(
+      names.filter((name) => VARIANT_STRENGTH.has(name)),
+      (name) => Math.abs(VARIANT_STRENGTH.get(name)! - target),
     );
-    return best;
   }
 
   private buildZonePool(
@@ -124,26 +120,15 @@ export class AgentAssigner {
     zonePool = this.buildZonePool(assignments),
   ): Record<string, AgentPatch> {
     const entries: Record<string, AgentPatch> = {};
-    const names = (Object.keys(AGENTS) as AgentName[]).sort((left, right) =>
-      left.localeCompare(right),
-    );
-    for (const name of names) {
+    for (const name of AGENT_NAMES) {
       const { zone, role } = AGENTS[name];
-      const seen = new Set<string>();
-      const candidates: ModelSelection[] = [];
-      for (const candidateZone of ZONE_FALLBACK[zone]) {
-        for (const candidate of zonePool[candidateZone]) {
-          if (seen.has(candidate.model)) continue;
-          seen.add(candidate.model);
-          candidates.push(candidate);
-        }
-      }
-      const best = candidates
-        .map((candidate) => ({
-          ...candidate,
-          score: this.scorer.score(candidate.model, role),
-        }))
-        .toSorted((left, right) => right.score - left.score)[0];
+      const candidates = uniqBy(
+        ZONE_FALLBACK[zone].flatMap((candidateZone) => zonePool[candidateZone]),
+        ({ model }) => model,
+      );
+      const best = maxBy(candidates, ({ model }) =>
+        this.scorer.score(model, role),
+      );
       if (!best) continue;
       const variants = this.scorer.variants(best.model);
       const variant =
@@ -195,8 +180,7 @@ export class AgentAssigner {
     variant: string | undefined,
   ): void {
     const agents = (this.config.agents ??= {});
-    const entry = agents[name] ?? {};
-    agents[name] = entry;
+    const entry = (agents[name] ??= {});
     entry.model = formatReference(model, variant);
     delete entry.variant;
     log.ok(
@@ -219,14 +203,12 @@ export class AgentAssigner {
     model: string | undefined;
     variant: string | undefined;
   }> {
-    return (Object.keys(AGENTS) as AgentName[])
-      .sort((left, right) => left.localeCompare(right))
-      .map((agent) => {
-        const { model, variant } = parseReference(
-          this.config.agents?.[agent]?.model ?? "",
-        );
-        return { agent, model: model || undefined, variant };
-      });
+    return AGENT_NAMES.map((agent) => {
+      const { model, variant } = parseReference(
+        this.config.agents?.[agent]?.model ?? "",
+      );
+      return { agent, model: model || undefined, variant };
+    });
   }
 
   apply(assignments: readonly ModelAssignment[]): void {

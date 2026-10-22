@@ -1,6 +1,7 @@
-import { isPlainObject as isRecord } from "es-toolkit/predicate";
+import { isPlainObject as isRecord, isString } from "es-toolkit/predicate";
 import { defaultConfigPath, loadConfig, saveConfig } from "../config/io.ts";
 import { log } from "../config/log.ts";
+import { fetchJson } from "../utils/http.ts";
 import { formatDisplayName, sortedByName } from "../model/display.ts";
 import {
   FORMAT_KEYS,
@@ -15,54 +16,10 @@ import type {
   ProviderModel,
 } from "../config/types.ts";
 
-const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : undefined;
-
-function providerPackage(provider: ProviderConfig): string {
-  return (asString(provider.package) ?? "").replace(/^aisdk:/, "");
-}
-
 const PACKAGE_TO_FORMAT: ReadonlyMap<string, FormatKey> = new Map(
   FORMAT_KEYS.map((format) => [SDK_FORMATS[format].package, format]),
 );
 const FETCH_CONCURRENCY = 4;
-
-async function fetchJson(
-  url: string,
-  headers: Record<string, string> = {},
-): Promise<unknown> {
-  try {
-    const parsed = new URL(url);
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        ...headers,
-      },
-      signal: AbortSignal.timeout(30_000),
-    });
-    if (!response.ok) {
-      const hint = (
-        {
-          401: "invalid API key",
-          403: "forbidden",
-          404: "not found",
-          429: "rate limited",
-        } satisfies Record<number, string>
-      )[response.status];
-      log.error(
-        `HTTP ${response.status}${hint ? ` (${hint})` : ""}: ${parsed.origin}${parsed.pathname}`,
-      );
-      return { error: String(response.status) };
-    }
-    return JSON.parse(await response.text()) as unknown;
-  } catch (error) {
-    log.error(
-      `network error: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    return { error: String(error) };
-  }
-}
 
 export class ModelSync {
   readonly config: OpenCodeConfig;
@@ -88,9 +45,17 @@ export class ModelSync {
     provider: ProviderConfig,
   ): Promise<readonly string[] | null> {
     const settings = provider.settings ?? {};
-    const format = PACKAGE_TO_FORMAT.get(providerPackage(provider)) || "openai";
+    const format =
+      PACKAGE_TO_FORMAT.get(
+        (isString(provider.package) ? provider.package : "").replace(
+          /^aisdk:/,
+          "",
+        ),
+      ) || "openai";
     const sdk = SDK_FORMATS[format];
-    const customBaseURL = asString(settings.baseURL);
+    const customBaseURL = isString(settings.baseURL)
+      ? settings.baseURL
+      : undefined;
     if (sdk.discovery === "catalog" && !customBaseURL) {
       log.info(
         `${name} is managed by OpenCode V2's model catalog; provide --base-url to sync a custom endpoint`,
@@ -102,7 +67,7 @@ export class ModelSync {
       log.warn(`no model endpoint configured for ${name}`);
       return null;
     }
-    const apiKey = asString(settings.apiKey) ?? "";
+    const apiKey = isString(settings.apiKey) ? settings.apiKey : "";
     const endpoint = baseURL.replace(/\/$/, "");
     const headers: Record<string, string> = {};
     let url: string;
@@ -131,7 +96,8 @@ export class ModelSync {
         ? Array.isArray(data) || !Array.isArray(data.models)
           ? []
           : data.models.flatMap((item) => {
-              const id = isRecord(item) ? asString(item.name) : undefined;
+              const id =
+                isRecord(item) && isString(item.name) ? item.name : undefined;
               return id ? [id.replace(/^models\//, "")] : [];
             })
         : (Array.isArray(data)
@@ -145,7 +111,9 @@ export class ModelSync {
                 ? item.trim() || undefined
                 : isRecord(item)
                   ? (["id", "name", "model"] as const)
-                      .map((key) => asString(item[key])?.trim())
+                      .map((key) =>
+                        isString(item[key]) ? item[key].trim() : undefined,
+                      )
                       .find(Boolean)
                   : undefined;
             return id ? [id] : [];
@@ -161,6 +129,7 @@ export class ModelSync {
     name: string,
     provider: ProviderConfig,
     selection?: readonly string[],
+    context?: number,
   ): Promise<boolean> {
     const modelIds = await this.fetchModelIds(name, provider);
     if (!modelIds) return false;
@@ -176,7 +145,11 @@ export class ModelSync {
     log.run(`building ${selected.length} models...`);
     const models: Record<string, ProviderModel> = {};
     for (const modelId of selected) {
-      models[modelId] = provider.models?.[modelId] ?? {};
+      const model = provider.models?.[modelId] ?? {};
+      models[modelId] =
+        context === undefined
+          ? model
+          : { ...model, limit: { ...model.limit, context } };
       log.ok(`  ${formatDisplayName(modelId)}`);
     }
     provider.models = Object.fromEntries(
@@ -194,15 +167,22 @@ export class ModelSync {
     format: FormatKey,
     credentials?: { baseURL?: string; apiKey?: string },
     selection?: readonly string[],
+    context?: number,
   ): Promise<void> {
     const settings: JsonObject = {};
     const baseURL = credentials?.baseURL || SDK_FORMATS[format].baseURL;
     if (baseURL) settings.baseURL = baseURL;
     if (credentials?.apiKey) settings.apiKey = credentials.apiKey;
+    const existing = this.config.providers?.[name];
     const updated = await this.syncProvider(
       name,
-      { package: packageForFormat(format), settings },
+      {
+        ...existing,
+        package: packageForFormat(format),
+        settings: { ...existing?.settings, ...settings },
+      },
       selection,
+      context,
     );
     if (updated) saveConfig(this.configPath, this.config);
   }
@@ -210,6 +190,7 @@ export class ModelSync {
   async syncProviders(
     names?: readonly string[],
     selection?: readonly string[],
+    context?: number,
   ): Promise<void> {
     const providers = (this.config.providers ??= {});
     const known = sortedByName(Object.keys(providers));
@@ -239,7 +220,10 @@ export class ModelSync {
     let updated = false;
     for (const name of selected) {
       const provider = providers[name];
-      if (provider && (await this.syncProvider(name, provider, selection)))
+      if (
+        provider &&
+        (await this.syncProvider(name, provider, selection, context))
+      )
         updated = true;
     }
     if (updated) saveConfig(this.configPath, this.config);
@@ -266,7 +250,13 @@ export class ModelSync {
       const provider = providers[name] ?? {};
       return {
         name,
-        format: PACKAGE_TO_FORMAT.get(providerPackage(provider)) ?? "unknown",
+        format:
+          PACKAGE_TO_FORMAT.get(
+            (isString(provider.package) ? provider.package : "").replace(
+              /^aisdk:/,
+              "",
+            ),
+          ) ?? "unknown",
         models: Object.keys(provider.models ?? {}).length,
       };
     });

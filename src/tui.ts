@@ -1,5 +1,5 @@
 import { parseArgs as parseNodeArgs } from "node:util";
-import { checkbox, confirm, input, password, select } from "@inquirer/prompts";
+import { confirm, input, password } from "@inquirer/prompts";
 import { defaultConfigPath, loadConfig, saveConfig } from "./config/io.ts";
 import { fail, log } from "./config/log.ts";
 import {
@@ -15,51 +15,7 @@ import {
 } from "./provider/formats.ts";
 import { ModelSync } from "./provider/sync.ts";
 import { AGENTS, AgentAssigner } from "./agent/assign.ts";
-
-const consoleUi = {
-  async menu(
-    items: readonly string[],
-    label = "select",
-    defaultIndex = 0,
-    zeroLabel?: string,
-  ): Promise<number> {
-    if (!items.length && !zeroLabel) return -1;
-    return select({
-      message: label,
-      choices: [
-        ...items.map((name, value) => ({ name, value })),
-        ...(zeroLabel ? [{ name: zeroLabel, value: -1 }] : []),
-      ],
-      default: defaultIndex >= 0 || zeroLabel ? defaultIndex : 0,
-    });
-  },
-  async pick(items: readonly string[], label = "select"): Promise<string[]> {
-    if (!items.length) return [];
-    return checkbox({
-      message: label,
-      choices: items.map((item) => ({
-        name: item,
-        value: item,
-        checked: true,
-      })),
-    });
-  },
-  async input(message: string): Promise<string> {
-    return (await input({ message })).trim();
-  },
-};
-
-function announce(argv: readonly string[]): void {
-  log.run(
-    `$ bun run cli ${argv
-      .map((token, index) => {
-        if (index > 0 && argv[index - 1] === "--api-key") return "***";
-        if (token.startsWith("--api-key=")) return "--api-key=***";
-        return /[\s=]/.test(token) ? `"${token}"` : token;
-      })
-      .join(" ")}`,
-  );
-}
+import { announce, menu, pick, promptGlobalContext } from "./utils/console.ts";
 
 const { values: flags } = parseNodeArgs({
   args: Bun.argv.slice(2),
@@ -71,7 +27,7 @@ async function main(): Promise<void> {
   if (!process.stdin.isTTY) throw new Error("interactive terminal required");
   while (true) {
     log.header("opencode config manager");
-    const action = await consoleUi.menu(
+    const action = await menu(
       [
         "add provider",
         "sync providers",
@@ -88,22 +44,24 @@ async function main(): Promise<void> {
       case 0: {
         const format =
           FORMAT_KEYS[
-            await consoleUi.menu(
+            await menu(
               FORMAT_KEYS.map((format) => SDK_FORMATS[format].description),
               "select API format",
             )
           ];
         if (!format) break;
-        const name = await consoleUi.input("provider name: ");
+        const name = (await input({ message: "provider name: " })).trim();
         if (!name) {
           log.warn("no name given, aborting");
           break;
         }
         const defaultURL = SDK_FORMATS[format].baseURL;
         const baseURL =
-          (await consoleUi.input(
-            `baseURL${defaultURL ? ` [${defaultURL}]` : " (optional)"}: `,
-          )) || defaultURL;
+          (
+            await input({
+              message: `baseURL${defaultURL ? ` [${defaultURL}]` : " (optional)"}: `,
+            })
+          ).trim() || defaultURL;
         const apiKey = (
           await password({
             message: "apiKey (optional): ",
@@ -121,7 +79,7 @@ async function main(): Promise<void> {
           settings: credentials as Record<string, string>,
         });
         if (!discovered) break;
-        const selection = await consoleUi.pick(
+        const selection = await pick(
           sortedByName(discovered),
           `select models for ${name}`,
         );
@@ -129,6 +87,7 @@ async function main(): Promise<void> {
           log.warn("no models selected, aborting");
           break;
         }
+        const context = await promptGlobalContext();
         announce([
           "add",
           name,
@@ -138,8 +97,9 @@ async function main(): Promise<void> {
           ...(apiKey ? ["--api-key", apiKey] : []),
           "--models",
           selection.join(","),
+          ...(context === undefined ? [] : ["--context", String(context)]),
         ]);
-        await sync.addProvider(name, format, credentials, selection);
+        await sync.addProvider(name, format, credentials, selection, context);
         break;
       }
       case 1: {
@@ -149,10 +109,7 @@ async function main(): Promise<void> {
           log.warn("no providers configured");
           break;
         }
-        const selected = await consoleUi.pick(
-          names,
-          "select providers to sync",
-        );
+        const selected = await pick(names, "select providers to sync");
         if (!selected.length) {
           log.warn("no providers selected");
           break;
@@ -164,7 +121,7 @@ async function main(): Promise<void> {
           if (name && provider) {
             const discovered = await sync.fetchModelIds(name, provider);
             if (discovered) {
-              const picked = await consoleUi.pick(
+              const picked = await pick(
                 sortedByName(discovered),
                 `select models for ${name}`,
               );
@@ -176,12 +133,14 @@ async function main(): Promise<void> {
             }
           }
         }
+        const context = await promptGlobalContext();
         announce([
           "sync",
           ...selected,
           ...(selection ? ["--models", selection.join(",")] : []),
+          ...(context === undefined ? [] : ["--context", String(context)]),
         ]);
-        await sync.syncProviders(selected, selection);
+        await sync.syncProviders(selected, selection, context);
         break;
       }
       case 2: {
@@ -192,14 +151,7 @@ async function main(): Promise<void> {
           break;
         }
         const name =
-          names[
-            await consoleUi.menu(
-              names,
-              "select provider to delete",
-              -1,
-              "cancel",
-            )
-          ];
+          names[await menu(names, "select provider to delete", -1, "cancel")];
         if (name) {
           announce(["remove", name]);
           sync.deleteProvider(name);
@@ -226,7 +178,7 @@ async function main(): Promise<void> {
             { sensitivity: "base" },
           );
         });
-        const selectedAgents = await consoleUi.pick(
+        const selectedAgents = await pick(
           agents,
           "select agents (comma-separated)",
         );
@@ -238,18 +190,16 @@ async function main(): Promise<void> {
           ...assigner.scorer.providers.keys(),
         ]);
         const provider =
-          providerNames[await consoleUi.menu(providerNames, "select provider")];
+          providerNames[await menu(providerNames, "select provider")];
         if (!provider) break;
         const models = sortedByName(
           assigner.scorer.providers.get(provider) ?? [],
         );
-        const model = models[await consoleUi.menu(models, "select model")];
+        const model = models[await menu(models, "select model")];
         if (!model) break;
         const variants = assigner.scorer.variants(model);
         const variant = variants.length
-          ? variants[
-              await consoleUi.menu(variants, "thinking variant", -1, "default")
-            ]
+          ? variants[await menu(variants, "thinking variant", -1, "default")]
           : undefined;
         announce([
           "assign",

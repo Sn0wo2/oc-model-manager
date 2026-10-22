@@ -10,8 +10,8 @@ export function formatDisplayName(rawId: string): string {
   if (cached !== undefined) return cached;
   const displayName = rawId
     .split("/")
-    .map((segment) => {
-      return (
+    .map(
+      (segment) =>
         BRAND_NAMES[
           segment.toLowerCase().replaceAll("-", "").replaceAll("_", "")
         ] ??
@@ -32,9 +32,8 @@ export function formatDisplayName(rawId: string): string {
               return word;
             return word.charAt(0).toUpperCase() + word.slice(1);
           })
-          .join("-")
-      );
-    })
+          .join("-"),
+    )
     .join(" ");
   displayNameCache.set(rawId, displayName);
   return displayName;
@@ -64,7 +63,5 @@ export function formatDisplayReference(
   model: string,
   variant?: string,
 ): string {
-  return variant
-    ? `${formatDisplayName(model)}#${variant}`
-    : formatDisplayName(model);
+  return formatReference(formatDisplayName(model), variant);
 }

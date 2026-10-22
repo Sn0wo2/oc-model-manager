@@ -3,11 +3,6 @@ import type { OpenCodeConfig, ProviderModel } from "../config/types.ts";
 
 export type Role = "strong" | "balanced" | "fast";
 
-const asString = (value: unknown): string | undefined =>
-  typeof value === "string" ? value : undefined;
-const asNumber = (value: unknown): number | undefined =>
-  typeof value === "number" ? value : undefined;
-
 type Tier = "reasoning" | "flagship" | "fast" | "balanced" | "standard";
 interface ModelTraits {
   family: string;
@@ -29,13 +24,13 @@ function scoreModelAuto(modelName: string): ModelTraits {
   const familyToken = tokens[familyIndex];
   const family = familyToken?.replace(/\d+$/, "") || familyToken || "unknown";
   const variants = tokens.filter((_, index) => index !== familyIndex);
-  const has = (words: readonly string[]) =>
-    variants.some((token) => words.includes(token));
   const traits = {
     family,
-    tier: has(["r1", "reasoning", "thinking", "deepthink", "codex"])
+    tier: ["r1", "reasoning", "thinking", "deepthink", "codex"].some((word) =>
+      variants.includes(word),
+    )
       ? "reasoning"
-      : has([
+      : [
             "opus",
             "pro",
             "ultra",
@@ -45,9 +40,9 @@ function scoreModelAuto(modelName: string): ModelTraits {
             "flagship",
             "large",
             "huge",
-          ])
+          ].some((word) => variants.includes(word))
         ? "flagship"
-        : has([
+        : [
               "nano",
               "haiku",
               "spark",
@@ -56,9 +51,9 @@ function scoreModelAuto(modelName: string): ModelTraits {
               "micro",
               "small",
               "tiny",
-            ])
+            ].some((word) => variants.includes(word))
           ? "fast"
-          : has([
+          : [
                 "sonnet",
                 "flash",
                 "lite",
@@ -67,7 +62,7 @@ function scoreModelAuto(modelName: string): ModelTraits {
                 "medium",
                 "base",
                 "chat",
-              ])
+              ].some((word) => variants.includes(word))
             ? "balanced"
             : "standard",
   } satisfies ModelTraits;
@@ -123,18 +118,20 @@ export class ModelScorer {
     if (!Array.isArray(variants)) return [];
     return variants.flatMap((variant) => {
       if (!isRecord(variant)) return [];
-      const id = asString(variant.id);
+      const id = typeof variant.id === "string" ? variant.id : undefined;
       return id ? [id] : [];
     });
   }
 
   score(model: string, role: Role): number {
     const meta = this.catalog.get(model);
-    const baseCost =
-      meta?.cost === undefined ? undefined : asNumber(meta.cost.input);
+    const rawCost = meta?.cost?.input;
+    const baseCost = typeof rawCost === "number" ? rawCost : undefined;
     let fast = baseCost !== undefined && baseCost <= 1.5;
     if (!fast) {
-      const family = asString(meta?.family)?.toLowerCase();
+      const rawFamily = meta?.family;
+      const family =
+        typeof rawFamily === "string" ? rawFamily.toLowerCase() : undefined;
       const familyName =
         family && family !== "unknown" ? family : scoreModelAuto(model).family;
       const lower = model.toLowerCase();
@@ -158,8 +155,9 @@ export class ModelScorer {
     if (meta?.variants?.length) score += weights.reasoning;
     if (meta?.capabilities?.tools) score += weights.tool_call;
     if (!fast) score += weights.not_fast;
+    const context = meta?.limit?.context;
     score += Math.min(
-      Math.floor((asNumber(meta?.limit?.context) ?? 0) / weights.context),
+      Math.floor((typeof context === "number" ? context : 0) / weights.context),
       role === "strong" ? 12 : 8,
     );
     score += this.variants(model).length * weights.variant;
