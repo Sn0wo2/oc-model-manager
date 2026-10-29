@@ -1,4 +1,5 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "target": "ES2023",
     "module": "ESNext",
@@ -6,16 +7,8 @@
     "allowImportingTsExtensions": true,
     "noEmit": true,
     "lib": ["ES2023", "DOM"],
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noImplicitOverride": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
     "verbatimModuleSyntax": true,
-    "types": ["bun"],
-    "skipLibCheck": true
+    "types": ["bun"]
   },
   "include": ["src/**/*.ts"]
 }

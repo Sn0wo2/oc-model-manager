@@ -114,3 +114,34 @@ dist
 
 # opencode
 opencode.jsonc
+
+# Template shared exclusions
+web_modules/
+.stylelintcache
+.env.*
+!.env.example
+.parcel-cache
+out
+.output
+.temp
+.svelte-kit/
+**/.vitepress/dist
+**/.vitepress/cache
+.docusaurus
+.firebase/
+.vscode-test
+.pnpm-store
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+.vite/
+.astro/
+.turbo
+node_modules.bun
+/build/

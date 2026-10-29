@@ -1,8 +1,8 @@
 interface SdkFormat {
-  package: string;
-  baseURL: string;
-  description: string;
-  discovery: "api" | "catalog";
+  package: string
+  baseURL: string
+  description: string
+  discovery: "api" | "catalog"
 }
 
 function sdkFormat(
@@ -16,7 +16,7 @@ function sdkFormat(
     description,
     discovery: "catalog",
     ...overrides,
-  };
+  }
 }
 
 export const SDK_FORMATS = {
@@ -38,10 +38,7 @@ export const SDK_FORMATS = {
   azure: sdkFormat("@ai-sdk/azure", "Azure OpenAI"),
   bedrock: sdkFormat("@ai-sdk/amazon-bedrock", "Amazon Bedrock"),
   vertex: sdkFormat("@ai-sdk/google-vertex", "Google Vertex AI"),
-  vertexAnthropic: sdkFormat(
-    "@ai-sdk/google-vertex/anthropic",
-    "Anthropic on Google Vertex AI",
-  ),
+  vertexAnthropic: sdkFormat("@ai-sdk/google-vertex/anthropic", "Anthropic on Google Vertex AI"),
   xai: sdkFormat("@ai-sdk/xai", "xAI Grok"),
   mistral: sdkFormat("@ai-sdk/mistral", "Mistral AI"),
   groq: sdkFormat("@ai-sdk/groq", "Groq"),
@@ -53,12 +50,12 @@ export const SDK_FORMATS = {
   perplexity: sdkFormat("@ai-sdk/perplexity", "Perplexity"),
   gateway: sdkFormat("@ai-sdk/gateway", "Vercel AI Gateway"),
   vercel: sdkFormat("@ai-sdk/vercel", "Vercel v0"),
-} satisfies Record<string, SdkFormat>;
+} satisfies Record<string, SdkFormat>
 
-export type FormatKey = keyof typeof SDK_FORMATS;
+export type FormatKey = keyof typeof SDK_FORMATS
 
 export function packageForFormat(format: FormatKey): string {
-  return `aisdk:${SDK_FORMATS[format].package}`;
+  return `aisdk:${SDK_FORMATS[format].package}`
 }
 
-export const FORMAT_KEYS = Object.keys(SDK_FORMATS) as FormatKey[];
+export const FORMAT_KEYS = Object.keys(SDK_FORMATS) as FormatKey[]

@@ -2,41 +2,42 @@ const BRAND_NAMES: Readonly<Record<string, string>> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
   minimax: "MiniMax",
-};
-const displayNameCache = new Map<string, string>();
+}
+const ACRONYM_PATTERN = /^(?:api|ai|gpt|glm|llm|sdk|url|mcp)$/
+const STARTS_WITH_DIGIT = /^\d/
+const HAS_UPPERCASE_AFTER_FIRST = /[A-Z]/
+const HAS_LOWERCASE = /[a-z]/
+const displayNameCache = new Map<string, string>()
 
 export function formatDisplayName(rawId: string): string {
-  const cached = displayNameCache.get(rawId);
-  if (cached !== undefined) return cached;
+  const cached = displayNameCache.get(rawId)
+  if (cached !== undefined) return cached
   const displayName = rawId
     .split("/")
     .map(
       (segment) =>
-        BRAND_NAMES[
-          segment.toLowerCase().replaceAll("-", "").replaceAll("_", "")
-        ] ??
+        BRAND_NAMES[segment.toLowerCase().replaceAll("-", "").replaceAll("_", "")] ??
         segment
           .replaceAll("_", "-")
           .split("-")
           .filter(Boolean)
           .map((word) => {
-            const lower = word.toLowerCase();
-            if (BRAND_NAMES[lower]) return BRAND_NAMES[lower];
-            if (/^(?:api|ai|gpt|glm|llm|sdk|url|mcp)$/.test(lower))
-              return word.toUpperCase();
+            const lower = word.toLowerCase()
+            if (BRAND_NAMES[lower]) return BRAND_NAMES[lower]
+            if (ACRONYM_PATTERN.test(lower)) return word.toUpperCase()
             if (
-              /^\d/.test(word) ||
+              STARTS_WITH_DIGIT.test(word) ||
               (word.length >= 2 && word === word.toUpperCase()) ||
-              (/[A-Z]/.test(word.slice(1)) && /[a-z]/.test(word))
+              (HAS_UPPERCASE_AFTER_FIRST.test(word.slice(1)) && HAS_LOWERCASE.test(word))
             )
-              return word;
-            return word.charAt(0).toUpperCase() + word.slice(1);
+              return word
+            return word.charAt(0).toUpperCase() + word.slice(1)
           })
           .join("-"),
     )
-    .join(" ");
-  displayNameCache.set(rawId, displayName);
-  return displayName;
+    .join(" ")
+  displayNameCache.set(rawId, displayName)
+  return displayName
 }
 
 export function sortedByName(items: Iterable<string>): string[] {
@@ -44,24 +45,21 @@ export function sortedByName(items: Iterable<string>): string[] {
     formatDisplayName(left).localeCompare(formatDisplayName(right), undefined, {
       sensitivity: "base",
     }),
-  );
+  )
 }
 
 export function formatReference(model: string, variant?: string): string {
-  return variant ? `${model}#${variant}` : model;
+  return variant ? `${model}#${variant}` : model
 }
 
 export function parseReference(ref: string): {
-  model: string;
-  variant: string | undefined;
+  model: string
+  variant: string | undefined
 } {
-  const [model, variant] = ref.split("#");
-  return { model: model ?? "", variant: variant || undefined };
+  const [model, variant] = ref.split("#")
+  return { model: model ?? "", variant: variant || undefined }
 }
 
-export function formatDisplayReference(
-  model: string,
-  variant?: string,
-): string {
-  return formatReference(formatDisplayName(model), variant);
+export function formatDisplayReference(model: string, variant?: string): string {
+  return formatReference(formatDisplayName(model), variant)
 }

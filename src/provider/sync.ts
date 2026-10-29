@@ -1,109 +1,83 @@
-import { isPlainObject as isRecord, isString } from "es-toolkit/predicate";
-import { defaultConfigPath, loadConfig, saveConfig } from "../config/io.ts";
-import { log } from "../config/log.ts";
-import { fetchJson } from "../utils/http.ts";
-import { formatDisplayName, sortedByName } from "../model/display.ts";
-import {
-  FORMAT_KEYS,
-  SDK_FORMATS,
-  packageForFormat,
-  type FormatKey,
-} from "./formats.ts";
-import type {
-  JsonObject,
-  OpenCodeConfig,
-  ProviderConfig,
-  ProviderModel,
-} from "../config/types.ts";
+import { isPlainObject as isRecord, isString } from "es-toolkit/predicate"
+import { defaultConfigPath, loadConfig, saveConfig } from "../config/io.ts"
+import { log } from "../config/log.ts"
+import type { JsonObject, OpenCodeConfig, ProviderConfig, ProviderModel } from "../config/types.ts"
+import { formatDisplayName, sortedByName } from "../model/display.ts"
+import { fetchJson } from "../utils/http.ts"
+import { FORMAT_KEYS, type FormatKey, packageForFormat, SDK_FORMATS } from "./formats.ts"
 
 const PACKAGE_TO_FORMAT: ReadonlyMap<string, FormatKey> = new Map(
   FORMAT_KEYS.map((format) => [SDK_FORMATS[format].package, format]),
-);
-const FETCH_CONCURRENCY = 4;
+)
+const AISDK_PREFIX = /^aisdk:/
+const TRAILING_SLASH = /\/$/
+const MODELS_PREFIX = /^models\//
+const FETCH_CONCURRENCY = 4
 
 export class ModelSync {
-  readonly config: OpenCodeConfig;
-  private readonly fetched = new Map<string, readonly string[] | null>();
+  readonly config: OpenCodeConfig
+  private readonly fetched = new Map<string, readonly string[] | null>()
 
   constructor(readonly configPath = defaultConfigPath()) {
-    this.config = loadConfig(configPath);
+    this.config = loadConfig(configPath)
   }
 
-  async fetchModelIds(
-    name: string,
-    provider: ProviderConfig,
-  ): Promise<readonly string[] | null> {
-    const cached = this.fetched.get(name);
-    if (cached !== undefined) return cached;
-    const result = await this.fetchModels(name, provider);
-    this.fetched.set(name, result);
-    return result;
+  async fetchModelIds(name: string, provider: ProviderConfig): Promise<readonly string[] | null> {
+    const cached = this.fetched.get(name)
+    if (cached !== undefined) return cached
+    const result = await this.fetchModels(name, provider)
+    this.fetched.set(name, result)
+    return result
   }
 
-  private async fetchModels(
-    name: string,
-    provider: ProviderConfig,
-  ): Promise<readonly string[] | null> {
-    const settings = provider.settings ?? {};
+  private async fetchModels(name: string, provider: ProviderConfig): Promise<readonly string[] | null> {
+    const settings = provider.settings ?? {}
     const format =
-      PACKAGE_TO_FORMAT.get(
-        (isString(provider.package) ? provider.package : "").replace(
-          /^aisdk:/,
-          "",
-        ),
-      ) || "openai";
-    const sdk = SDK_FORMATS[format];
-    const customBaseURL = isString(settings.baseURL)
-      ? settings.baseURL
-      : undefined;
+      PACKAGE_TO_FORMAT.get((isString(provider.package) ? provider.package : "").replace(AISDK_PREFIX, "")) || "openai"
+    const sdk = SDK_FORMATS[format]
+    const customBaseURL = isString(settings["baseURL"]) ? settings["baseURL"] : undefined
     if (sdk.discovery === "catalog" && !customBaseURL) {
-      log.info(
-        `${name} is managed by OpenCode V2's model catalog; provide --base-url to sync a custom endpoint`,
-      );
-      return null;
+      log.info(`${name} is managed by OpenCode V2's model catalog; provide --base-url to sync a custom endpoint`)
+      return null
     }
-    const baseURL = customBaseURL || sdk.baseURL;
+    const baseURL = customBaseURL || sdk.baseURL
     if (!baseURL) {
-      log.warn(`no model endpoint configured for ${name}`);
-      return null;
+      log.warn(`no model endpoint configured for ${name}`)
+      return null
     }
-    const apiKey = isString(settings.apiKey) ? settings.apiKey : "";
-    const endpoint = baseURL.replace(/\/$/, "");
-    const headers: Record<string, string> = {};
-    let url: string;
+    const apiKey = isString(settings["apiKey"]) ? settings["apiKey"] : ""
+    const endpoint = baseURL.replace(TRAILING_SLASH, "")
+    const headers: Record<string, string> = {}
+    let url: string
     if (format === "gemini") {
-      url = `${endpoint}/models${apiKey ? `?key=${encodeURIComponent(apiKey)}` : ""}`;
+      url = `${endpoint}/models${apiKey ? `?key=${encodeURIComponent(apiKey)}` : ""}`
     } else {
       if (format === "anthropic") {
-        headers["anthropic-version"] = "2023-06-01";
-        if (apiKey) headers["x-api-key"] = apiKey;
+        headers["anthropic-version"] = "2023-06-01"
+        if (apiKey) headers["x-api-key"] = apiKey
       } else if (apiKey) {
-        headers.Authorization = `Bearer ${apiKey}`;
+        headers["Authorization"] = `Bearer ${apiKey}`
       }
-      url = endpoint.endsWith("/models") ? endpoint : `${endpoint}/models`;
+      url = endpoint.endsWith("/models") ? endpoint : `${endpoint}/models`
     }
-    log.run(`fetching models from ${name}...`);
-    const data = await fetchJson(url, headers);
-    if (
-      (!isRecord(data) && !Array.isArray(data)) ||
-      (isRecord(data) && "error" in data)
-    ) {
-      log.error(`failed to fetch models from ${name}`);
-      return null;
+    log.run(`fetching models from ${name}...`)
+    const data = await fetchJson(url, headers)
+    if (!(isRecord(data) || Array.isArray(data)) || (isRecord(data) && "error" in data)) {
+      log.error(`failed to fetch models from ${name}`)
+      return null
     }
     const modelIds =
       format === "gemini"
-        ? Array.isArray(data) || !Array.isArray(data.models)
+        ? Array.isArray(data) || !Array.isArray(data["models"])
           ? []
-          : data.models.flatMap((item) => {
-              const id =
-                isRecord(item) && isString(item.name) ? item.name : undefined;
-              return id ? [id.replace(/^models\//, "")] : [];
+          : data["models"].flatMap((item) => {
+              const id = isRecord(item) && isString(item["name"]) ? item["name"] : undefined
+              return id ? [id.replace(MODELS_PREFIX, "")] : []
             })
         : (Array.isArray(data)
             ? data
             : isRecord(data)
-              ? ([data.data, data.models].find(Array.isArray) ?? [])
+              ? ([data["data"], data["models"]].find(Array.isArray) ?? [])
               : []
           ).flatMap((item) => {
             const id =
@@ -111,18 +85,16 @@ export class ModelSync {
                 ? item.trim() || undefined
                 : isRecord(item)
                   ? (["id", "name", "model"] as const)
-                      .map((key) =>
-                        isString(item[key]) ? item[key].trim() : undefined,
-                      )
+                      .map((key) => (isString(item[key]) ? item[key].trim() : undefined))
                       .find(Boolean)
-                  : undefined;
-            return id ? [id] : [];
-          });
+                  : undefined
+            return id ? [id] : []
+          })
     if (!modelIds.length) {
-      log.warn(`no models found for ${name}`);
-      return null;
+      log.warn(`no models found for ${name}`)
+      return null
     }
-    return modelIds;
+    return modelIds
   }
 
   private async syncProvider(
@@ -131,35 +103,30 @@ export class ModelSync {
     selection?: readonly string[],
     context?: number,
   ): Promise<boolean> {
-    const modelIds = await this.fetchModelIds(name, provider);
-    if (!modelIds) return false;
-    log.ok(`found ${modelIds.length} models`);
-    const selectedModels = selection?.length ? new Set(selection) : undefined;
-    const selected = selectedModels
-      ? modelIds.filter((modelId) => selectedModels.has(modelId))
-      : modelIds;
+    const modelIds = await this.fetchModelIds(name, provider)
+    if (!modelIds) return false
+    log.ok(`found ${modelIds.length} models`)
+    const selectedModels = selection?.length ? new Set(selection) : undefined
+    const selected = selectedModels ? modelIds.filter((modelId) => selectedModels.has(modelId)) : modelIds
     if (!selected.length) {
-      log.warn("no models selected, skipping");
-      return false;
+      log.warn("no models selected, skipping")
+      return false
     }
-    log.run(`building ${selected.length} models...`);
-    const models: Record<string, ProviderModel> = {};
+    log.run(`building ${selected.length} models...`)
+    const models: Record<string, ProviderModel> = {}
     for (const modelId of selected) {
-      const model = provider.models?.[modelId] ?? {};
-      models[modelId] =
-        context === undefined
-          ? model
-          : { ...model, limit: { ...model.limit, context } };
-      log.ok(`  ${formatDisplayName(modelId)}`);
+      const model = provider.models?.[modelId] ?? {}
+      models[modelId] = context === undefined ? model : { ...model, limit: { ...model.limit, context } }
+      log.ok(`  ${formatDisplayName(modelId)}`)
     }
     provider.models = Object.fromEntries(
-      Object.entries(models).sort(([left], [right]) =>
-        formatDisplayName(left).localeCompare(formatDisplayName(right)),
-      ),
-    );
-    (this.config.providers ??= {})[name] = provider;
-    log.ok(`updated ${name} (${Object.keys(models).length} models)`);
-    return true;
+      Object.entries(models).sort(([left], [right]) => formatDisplayName(left).localeCompare(formatDisplayName(right))),
+    )
+    const providers = this.config.providers ?? {}
+    providers[name] = provider
+    this.config.providers = providers
+    log.ok(`updated ${name} (${Object.keys(models).length} models)`)
+    return true
   }
 
   async addProvider(
@@ -169,11 +136,11 @@ export class ModelSync {
     selection?: readonly string[],
     context?: number,
   ): Promise<void> {
-    const settings: JsonObject = {};
-    const baseURL = credentials?.baseURL || SDK_FORMATS[format].baseURL;
-    if (baseURL) settings.baseURL = baseURL;
-    if (credentials?.apiKey) settings.apiKey = credentials.apiKey;
-    const existing = this.config.providers?.[name];
+    const settings: JsonObject = {}
+    const baseURL = credentials?.baseURL || SDK_FORMATS[format].baseURL
+    if (baseURL) settings["baseURL"] = baseURL
+    if (credentials?.apiKey) settings["apiKey"] = credentials.apiKey
+    const existing = this.config.providers?.[name]
     const updated = await this.syncProvider(
       name,
       {
@@ -183,82 +150,72 @@ export class ModelSync {
       },
       selection,
       context,
-    );
-    if (updated) saveConfig(this.configPath, this.config);
+    )
+    if (updated) saveConfig(this.configPath, this.config)
   }
 
-  async syncProviders(
-    names?: readonly string[],
-    selection?: readonly string[],
-    context?: number,
-  ): Promise<void> {
-    const providers = (this.config.providers ??= {});
-    const known = sortedByName(Object.keys(providers));
+  async syncProviders(names?: readonly string[], selection?: readonly string[], context?: number): Promise<void> {
+    const providers = this.config.providers ?? {}
+    this.config.providers = providers
+    const known = sortedByName(Object.keys(providers))
     if (!known.length) {
-      log.warn("no providers configured");
-      return;
+      log.warn("no providers configured")
+      return
     }
     const selected = names?.length
       ? names.filter((name) => {
           if (!providers[name]) {
-            log.warn(`unknown provider: ${name}`);
-            return false;
+            log.warn(`unknown provider: ${name}`)
+            return false
           }
-          return true;
+          return true
         })
-      : known;
-    if (!selected.length) return;
-    if (selection?.length && selected.length !== 1)
-      throw new TypeError("--models requires exactly one provider");
+      : known
+    if (!selected.length) return
+    if (selection?.length && selected.length !== 1) throw new TypeError("--models requires exactly one provider")
     for (let start = 0; start < selected.length; start += FETCH_CONCURRENCY) {
       await Promise.all(
-        selected
-          .slice(start, start + FETCH_CONCURRENCY)
-          .map((name) => this.fetchModelIds(name, providers[name]!)),
-      );
-    }
-    let updated = false;
-    for (const name of selected) {
-      const provider = providers[name];
-      if (
-        provider &&
-        (await this.syncProvider(name, provider, selection, context))
+        selected.slice(start, start + FETCH_CONCURRENCY).flatMap((name) => {
+          const provider = providers[name]
+          return provider ? [this.fetchModelIds(name, provider)] : []
+        }),
       )
-        updated = true;
     }
-    if (updated) saveConfig(this.configPath, this.config);
+    let updated = false
+    for (const name of selected) {
+      const provider = providers[name]
+      if (provider && (await this.syncProvider(name, provider, selection, context))) updated = true
+    }
+    if (updated) saveConfig(this.configPath, this.config)
   }
 
   deleteProvider(name: string): void {
-    const providers = (this.config.providers ??= {});
+    const providers = this.config.providers ?? {}
+    this.config.providers = providers
     if (!providers[name]) {
-      log.warn(`unknown provider: ${name}`);
-      return;
+      log.warn(`unknown provider: ${name}`)
+      return
     }
-    delete providers[name];
-    log.ok(`deleted ${name}`);
-    saveConfig(this.configPath, this.config);
+    delete providers[name]
+    log.ok(`deleted ${name}`)
+    saveConfig(this.configPath, this.config)
   }
 
   listProviders(): Array<{
-    name: string;
-    format: string;
-    models: number;
+    name: string
+    format: string
+    models: number
   }> {
-    const providers = this.config.providers ?? {};
+    const providers = this.config.providers ?? {}
     return sortedByName(Object.keys(providers)).map((name) => {
-      const provider = providers[name] ?? {};
+      const provider = providers[name] ?? {}
       return {
         name,
         format:
-          PACKAGE_TO_FORMAT.get(
-            (isString(provider.package) ? provider.package : "").replace(
-              /^aisdk:/,
-              "",
-            ),
-          ) ?? "unknown",
+          PACKAGE_TO_FORMAT.get((isString(provider.package) ? provider.package : "").replace(AISDK_PREFIX, "")) ??
+          "unknown",
         models: Object.keys(provider.models ?? {}).length,
-      };
-    });
+      }
+    })
   }
 }
