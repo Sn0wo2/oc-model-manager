@@ -2,10 +2,14 @@ version: 2
 project_name: oc-model-manager
 
 builds:
-  - skip: true
+  - id: app
+    skip: true
 
 archives:
-  - formats: [none]
+  - id: app
+    meta: true
+    name_template: "{{ .ProjectName }}_{{ .Version }}"
+    formats: [none]
 
 checksum:
   disable: true
@@ -41,6 +45,7 @@ changelog:
 
 release:
   prerelease: auto
+  replace_existing_artifacts: true
   header: |
     {{ if .Prerelease }}
     > ⚠️ **WARNING: This is a pre-release version and is not recommended for production use.**
