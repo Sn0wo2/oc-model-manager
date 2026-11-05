@@ -4,8 +4,9 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { isPlainObject as isRecord } from "es-toolkit/predicate"
 import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
+import { z } from "zod"
 import { log } from "./log.ts"
-import type { OpenCodeConfig } from "./types.ts"
+import { type OpenCodeConfig, openCodeConfigSchema } from "./schema.ts"
 
 export function defaultConfigPath(): string {
   const globalDirectory =
@@ -16,7 +17,7 @@ export function defaultConfigPath(): string {
   return candidates.filter((path) => existsSync(path)).at(-1) ?? fallbackPath
 }
 
-function parseConfig(text: string, source = "OpenCode config"): Record<string, unknown> {
+function parseConfig(text: string, source: string): Record<string, unknown> {
   const errors: ParseError[] = []
   const config: unknown = parse(text, errors, { allowTrailingComma: true })
   const first = errors[0]
@@ -28,32 +29,9 @@ function parseConfig(text: string, source = "OpenCode config"): Record<string, u
 export function loadConfig(configPath: string): OpenCodeConfig {
   if (!existsSync(configPath)) return {}
   const document = parseConfig(readFileSync(configPath, "utf8"), configPath)
-  const providers = document["providers"]
-  if (providers !== undefined) {
-    if (!isRecord(providers)) throw new TypeError("config field 'providers' must be an object")
-    for (const [name, entry] of Object.entries(providers)) {
-      if (!isRecord(entry)) throw new TypeError(`provider '${name}' must be an object`)
-      const models = entry["models"]
-      if (models !== undefined && !isRecord(models)) {
-        throw new TypeError(`provider '${name}.models' must be an object`)
-      }
-      const settings = entry["settings"]
-      if (settings !== undefined && !isRecord(settings)) {
-        throw new TypeError(`provider '${name}.settings' must be an object`)
-      }
-      for (const [id, meta] of Object.entries(models ?? {})) {
-        if (!isRecord(meta)) throw new TypeError(`provider '${name}.models.${id}' must be an object`)
-      }
-    }
-  }
-  const agents = document["agents"]
-  if (agents !== undefined) {
-    if (!isRecord(agents)) throw new TypeError("config field 'agents' must be an object")
-    for (const [name, entry] of Object.entries(agents)) {
-      if (entry !== undefined && !isRecord(entry)) throw new TypeError(`agent '${name}' must be an object`)
-    }
-  }
-  return document as OpenCodeConfig
+  const parsed = openCodeConfigSchema.safeParse(document)
+  if (!parsed.success) throw new SyntaxError(`${configPath}: ${z.prettifyError(parsed.error)}`)
+  return parsed.data
 }
 
 export function saveConfig(configPath: string, config: OpenCodeConfig): void {
@@ -74,8 +52,9 @@ export function saveConfig(configPath: string, config: OpenCodeConfig): void {
       )
     }
   }
-  const temporary = join(dirname(configPath), `.tmp-${randomUUID()}`)
-  mkdirSync(dirname(configPath), { recursive: true })
+  const directory = dirname(configPath)
+  if (!existsSync(directory)) mkdirSync(directory, { recursive: true })
+  const temporary = join(directory, `.tmp-${randomUUID()}`)
   try {
     writeFileSync(temporary, text, {
       encoding: "utf8",

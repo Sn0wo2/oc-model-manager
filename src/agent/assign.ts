@@ -1,26 +1,21 @@
 import { maxBy, minBy, uniqBy } from "es-toolkit/array"
 import { log } from "../config/log.ts"
-import type { OpenCodeConfig } from "../config/types.ts"
-import { formatDisplayName, formatReference, parseReference } from "../model/display.ts"
+import type { OpenCodeConfig } from "../config/schema.ts"
+import { formatDisplayName, parseReference } from "../model/display.ts"
 import { ModelScorer, type Role } from "../model/score.ts"
 
-export type Zone = "high" | "medium" | "low"
+type Zone = "high" | "medium" | "low"
 type Effort = Zone | "none"
 
-interface ModelSelection {
+export interface AgentPatch {
   model: string
-  variant?: string
+  variant?: string | undefined
 }
 
 interface ModelAssignment {
   level: Zone
   models: string[]
   variantOverrides?: Record<string, string>
-}
-
-interface AgentPatch {
-  model: string
-  variant?: string
 }
 
 const VARIANT_STRENGTH = new Map(
@@ -35,10 +30,7 @@ export const AGENTS = {
   librarian: { zone: "low", role: "fast" },
   oracle: { zone: "high", role: "strong" },
 } as const satisfies Record<string, { zone: Zone; role: Role }>
-export type AgentName = keyof typeof AGENTS
-const AGENT_NAMES = Object.keys(AGENTS).toSorted((a, b) => a.localeCompare(b)) as AgentName[]
 
-const MODEL_ZONES = ["high", "medium", "low"] as const satisfies readonly Zone[]
 const ZONE_FALLBACK: Record<Zone, readonly Zone[]> = {
   high: ["high", "medium", "low"],
   medium: ["medium", "low", "high"],
@@ -52,8 +44,8 @@ export class AgentAssigner {
     this.scorer = new ModelScorer(config)
   }
 
-  private resolveVariant(names: readonly string[], level: Effort): string | undefined {
-    if (level === "none") return names.find((name) => name === "none" || name === "off" || name === "disabled")
+  private resolveVariant(names: readonly string[], level: Effort) {
+    if (level === "none") return names.find((name) => ["none", "off", "disabled"].includes(name))
     if (names.includes(level)) return level
     const target = VARIANT_STRENGTH.get(level)
     if (target === undefined) return undefined
@@ -66,40 +58,29 @@ export class AgentAssigner {
     )
   }
 
-  private buildZonePool(assignments: readonly ModelAssignment[]): Record<Zone, ModelSelection[]> {
-    const selection: Record<Zone, ModelSelection[]> = {
-      high: [],
-      medium: [],
-      low: [],
-    }
-    for (const assignment of assignments) {
+  private buildZonePool(assignments: readonly ModelAssignment[]) {
+    const selection: Record<Zone, AgentPatch[]> = { high: [], medium: [], low: [] }
+    for (const assignment of assignments)
       selection[assignment.level] = assignment.models.map((model) => {
         const variant = assignment.variantOverrides?.[model]
         return variant ? { model, variant } : { model }
       })
-    }
-    const pools: Record<Zone, ModelSelection[]> = {
-      high: [],
-      medium: [],
-      low: [],
-    }
-    for (const zone of MODEL_ZONES) {
+    const pools: Record<Zone, AgentPatch[]> = { high: [], medium: [], low: [] }
+    for (const zone of ["high", "medium", "low"] as const) {
       const source = ZONE_FALLBACK[zone].find((candidate) => selection[candidate].length)
       if (!source) continue
-      pools[zone] = [...selection[source]]
+      pools[zone] = selection[source]
       if (source !== zone)
         log.warn(`${zone} zone empty - borrowing ${selection[source].length} models from ${source} zone`)
     }
     return pools
   }
 
-  buildAgentPatch(
-    assignments: readonly ModelAssignment[],
-    zonePool = this.buildZonePool(assignments),
-  ): Record<string, AgentPatch> {
+  buildAgentPatch(assignments: readonly ModelAssignment[], zonePool = this.buildZonePool(assignments)) {
     const entries: Record<string, AgentPatch> = {}
-    for (const name of AGENT_NAMES) {
-      const { zone, role } = AGENTS[name]
+    for (const [name, { zone, role }] of Object.entries(AGENTS).toSorted(([left], [right]) =>
+      left.localeCompare(right),
+    )) {
       const candidates = uniqBy(
         ZONE_FALLBACK[zone].flatMap((candidateZone) => zonePool[candidateZone]),
         ({ model }) => model,
@@ -114,7 +95,7 @@ export class AgentAssigner {
     return entries
   }
 
-  autoAssign(models: readonly string[], variantOverrides: Readonly<Record<string, string>> = {}): ModelAssignment[] {
+  autoAssign(models: readonly string[], variantOverrides: Readonly<Record<string, string>> = {}) {
     const ranked = [...new Set(models)]
       .map((model) => {
         return { model, score: this.scorer.score(model, "strong") }
@@ -122,13 +103,13 @@ export class AgentAssigner {
       .toSorted((left, right) => right.score - left.score)
       .map(({ model }) => model)
     const third = Math.ceil(ranked.length / 3)
-    const zones: Record<Zone, string[]> = {
+    const zones = {
       high: ranked.slice(0, third),
       medium: ranked.slice(third, third * 2),
       low: ranked.slice(third * 2),
     }
     const assignments: ModelAssignment[] = []
-    for (const level of MODEL_ZONES) {
+    for (const level of ["high", "medium", "low"] as const) {
       const pool = zones[level]
       if (!pool.length) continue
       const presets: Record<string, string> = {}
@@ -145,45 +126,38 @@ export class AgentAssigner {
     return assignments
   }
 
-  private setAgentModel(name: string, model: string, variant: string | undefined): void {
+  private setAgentModel(name: string, model: string, variant: string | undefined) {
     const agents = this.config.agents ?? {}
     this.config.agents = agents
     const entry = agents[name] ?? {}
     agents[name] = entry
-    entry.model = formatReference(model, variant)
+    entry.model = variant ? `${model}#${variant}` : model
     delete entry["variant"]
     log.ok(`  ${name} -> ${formatDisplayName(model)}${variant ? `#${variant}` : ""}`)
   }
 
-  applyExplicit(entries: Readonly<Record<string, { model: string; variant?: string | undefined }>>): void {
-    for (const [name, { model, variant }] of Object.entries(entries)) {
-      this.setAgentModel(name, model, variant)
-    }
+  applyExplicit(entries: Readonly<Record<string, AgentPatch>>) {
+    for (const [name, { model, variant }] of Object.entries(entries)) this.setAgentModel(name, model, variant)
   }
 
-  currentAssignments(): Array<{
-    agent: string
-    model: string | undefined
-    variant: string | undefined
-  }> {
-    return AGENT_NAMES.map((agent) => {
-      const { model, variant } = parseReference(this.config.agents?.[agent]?.model ?? "")
-      return { agent, model: model || undefined, variant }
-    })
+  currentAssignments() {
+    return Object.keys(AGENTS)
+      .toSorted((left, right) => left.localeCompare(right))
+      .map((agent) => {
+        const { model, variant } = parseReference(this.config.agents?.[agent]?.model ?? "")
+        return { agent, model: model || undefined, variant }
+      })
   }
 
-  apply(assignments: readonly ModelAssignment[]): void {
+  apply(assignments: readonly ModelAssignment[]) {
     const zonePool = this.buildZonePool(assignments)
     const agentPatch = this.buildAgentPatch(assignments, zonePool)
-    for (const [name, patch] of Object.entries(agentPatch)) {
-      this.setAgentModel(name, patch.model, patch.variant)
-    }
+    this.applyExplicit(agentPatch)
     const buildModel = agentPatch["build"]?.model
     if (buildModel) {
       this.config.model = buildModel
       this.config.default_agent = "build"
-      log.ok(`default model -> ${formatDisplayName(buildModel)}`)
-      log.ok("default agent -> build")
+      log.ok(`default model -> ${formatDisplayName(buildModel)}, default agent -> build`)
     }
     const lowModel = zonePool.low[0]?.model
     if (lowModel) this.setAgentModel("title", lowModel, undefined)

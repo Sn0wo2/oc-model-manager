@@ -1,5 +1,4 @@
-import { isPlainObject as isRecord } from "es-toolkit/predicate"
-import type { OpenCodeConfig, ProviderModel } from "../config/types.ts"
+import type { OpenCodeConfig, ProviderModel } from "../config/schema.ts"
 
 export type Role = "strong" | "balanced" | "fast"
 
@@ -15,6 +14,13 @@ const STARTS_WITH_LETTER = /^[a-z]/
 const NUMERIC_TOKEN = /^\d+(?:\.\d+)?$/
 const TRAILING_DIGITS = /\d+$/
 
+const TIER_KEYWORDS: readonly (readonly [Tier, readonly string[]])[] = [
+  ["reasoning", ["r1", "reasoning", "thinking", "deepthink", "codex"]],
+  ["flagship", ["opus", "pro", "ultra", "max", "plus", "advanced", "flagship", "large", "huge"]],
+  ["fast", ["nano", "haiku", "spark", "turbo", "speed", "micro", "small", "tiny"]],
+  ["balanced", ["sonnet", "flash", "lite", "mini", "standard", "medium", "base", "chat"]],
+]
+
 function scoreModelAuto(modelName: string): ModelTraits {
   const cached = traitsCache.get(modelName)
   if (cached) return cached
@@ -25,20 +31,8 @@ function scoreModelAuto(modelName: string): ModelTraits {
   const variants = tokens.filter((_, index) => index !== familyIndex)
   const traits = {
     family,
-    tier: ["r1", "reasoning", "thinking", "deepthink", "codex"].some((word) => variants.includes(word))
-      ? "reasoning"
-      : ["opus", "pro", "ultra", "max", "plus", "advanced", "flagship", "large", "huge"].some((word) =>
-            variants.includes(word),
-          )
-        ? "flagship"
-        : ["nano", "haiku", "spark", "turbo", "speed", "micro", "small", "tiny"].some((word) => variants.includes(word))
-          ? "fast"
-          : ["sonnet", "flash", "lite", "mini", "standard", "medium", "base", "chat"].some((word) =>
-                variants.includes(word),
-              )
-            ? "balanced"
-            : "standard",
-  } satisfies ModelTraits
+    tier: TIER_KEYWORDS.find(([, words]) => words.some((word) => variants.includes(word)))?.[0] ?? "standard",
+  }
   traitsCache.set(modelName, traits)
   return traits
 }
@@ -82,28 +76,20 @@ export class ModelScorer {
     }
   }
 
-  variants(model: string): string[] {
-    const variants = this.catalog.get(model)?.variants
-    if (!Array.isArray(variants)) return []
-    return variants.flatMap((variant) => {
-      if (!isRecord(variant)) return []
-      const id = typeof variant.id === "string" ? variant.id : undefined
-      return id ? [id] : []
-    })
+  variants(model: string) {
+    return this.catalog.get(model)?.variants?.map((variant) => variant.id) ?? []
   }
 
   score(model: string, role: Role): number {
     const meta = this.catalog.get(model)
-    const rawCost = meta?.cost?.input
-    const baseCost = typeof rawCost === "number" ? rawCost : undefined
+    const baseCost = meta?.cost?.input
     let fast = baseCost !== undefined && baseCost <= 1.5
     if (!fast) {
-      const rawFamily = meta?.family
-      const family = typeof rawFamily === "string" ? rawFamily.toLowerCase() : undefined
-      const familyName = family && family !== "unknown" ? family : scoreModelAuto(model).family
+      const family =
+        meta?.family && meta.family !== "unknown" ? meta.family.toLowerCase() : scoreModelAuto(model).family
       const lower = model.toLowerCase()
       fast = ["mini", "nano", "flash", "haiku", "spark"].some(
-        (keyword) => familyName.includes(keyword) || lower.includes(keyword),
+        (keyword) => family.includes(keyword) || lower.includes(keyword),
       )
     }
     if (role === "fast") {
@@ -122,16 +108,10 @@ export class ModelScorer {
     if (meta?.variants?.length) score += weights.reasoning
     if (meta?.capabilities?.tools) score += weights.tool_call
     if (!fast) score += weights.not_fast
-    const context = meta?.limit?.context
-    score += Math.min(
-      Math.floor((typeof context === "number" ? context : 0) / weights.context),
-      role === "strong" ? 12 : 8,
-    )
-    score += this.variants(model).length * weights.variant
-    const input = meta?.capabilities?.input
-    if (Array.isArray(input) && input.some((value) => ["image", "pdf", "audio", "video"].includes(value))) {
+    score += Math.min(Math.floor((meta?.limit?.context ?? 0) / weights.context), role === "strong" ? 12 : 8)
+    score += (meta?.variants?.length ?? 0) * weights.variant
+    if (meta?.capabilities?.input?.some((value) => ["image", "pdf", "audio", "video"].includes(value)))
       score += weights.multimodal
-    }
     const tier = scoreModelAuto(model).tier
     if (tier === "flagship" || (role === "balanced" && tier === "balanced")) score += weights.tier
     if (role === "balanced")

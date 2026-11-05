@@ -48,18 +48,7 @@ export function sortedByName(items: Iterable<string>): string[] {
   )
 }
 
-export function formatReference(model: string, variant?: string): string {
-  return variant ? `${model}#${variant}` : model
-}
-
-export function parseReference(ref: string): {
-  model: string
-  variant: string | undefined
-} {
+export function parseReference(ref: string) {
   const [model, variant] = ref.split("#")
   return { model: model ?? "", variant: variant || undefined }
-}
-
-export function formatDisplayReference(model: string, variant?: string): string {
-  return formatReference(formatDisplayName(model), variant)
 }

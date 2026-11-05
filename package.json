@@ -14,13 +14,14 @@
     "ci": "bun run lint && bun run check && bun run security"
   },
   "dependencies": {
-    "@inquirer/prompts": "^8.7.2",
-    "es-toolkit": "^1.52.0",
-    "jsonc-parser": "^3.3.1"
+    "@inquirer/prompts": "^8.7.5",
+    "es-toolkit": "^1.53.1",
+    "jsonc-parser": "^3.3.1",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/bun": "^1.4.2",
-    "@biomejs/biome": "^2.6.4",
+    "@types/bun": "^1.4.4",
+    "@biomejs/biome": "^2.6.5",
     "typescript": "^7.0.2"
   }
 }

@@ -2,8 +2,8 @@ import { parseArgs as parseNodeArgs } from "node:util"
 import { AgentAssigner } from "./agent/assign.ts"
 import { defaultConfigPath, loadConfig, saveConfig } from "./config/io.ts"
 import { fail, log } from "./config/log.ts"
-import { formatDisplayReference, parseReference } from "./model/display.ts"
-import { FORMAT_KEYS, type FormatKey } from "./provider/formats.ts"
+import { formatDisplayName, parseReference } from "./model/display.ts"
+import { FORMAT_KEYS } from "./provider/formats.ts"
 import { ModelSync } from "./provider/sync.ts"
 
 import { parsePositiveInteger, splitList } from "./utils/input.ts"
@@ -59,27 +59,20 @@ Options:
   if (command === "add") {
     const name = positional[0]
     if (!name) throw new TypeError("add requires a provider name")
-    const formatValue = flags.format
-    if (!formatValue) throw new TypeError("missing required option: --format")
-    if (!(FORMAT_KEYS as readonly string[]).includes(formatValue))
-      throw new TypeError(`unknown format: ${formatValue} (valid: ${FORMAT_KEYS.join(", ")})`)
-    const baseURL = flags["base-url"] || undefined
-    const apiKey = flags["api-key"] || undefined
+    const format = FORMAT_KEYS.find((key) => key === flags.format)
+    if (!format) throw new TypeError(`missing or unknown --format: ${flags.format} (valid: ${FORMAT_KEYS.join(", ")})`)
     await new ModelSync(configPath).addProvider(
       name,
-      formatValue as FormatKey,
-      {
-        ...(baseURL ? { baseURL } : {}),
-        ...(apiKey ? { apiKey } : {}),
-      },
+      format,
+      { baseURL: flags["base-url"] || undefined, apiKey: flags["api-key"] || undefined },
       splitList(flags.models),
-      flags.context !== undefined ? parsePositiveInteger(flags.context, "--context") : undefined,
+      parsePositiveInteger(flags.context, "--context"),
     )
   } else if (command === "sync") {
     await new ModelSync(configPath).syncProviders(
       positional,
       splitList(flags.models),
-      flags.context !== undefined ? parsePositiveInteger(flags.context, "--context") : undefined,
+      parsePositiveInteger(flags.context, "--context"),
     )
   } else if (command === "remove") {
     const name = positional[0]
@@ -109,7 +102,7 @@ Options:
       const patch = assigner.buildAgentPatch(assignments)
       log.header(dryRun ? "assign auto (dry run)" : "assign auto")
       for (const [agent, entry] of Object.entries(patch))
-        log.info(`  ${agent} -> ${formatDisplayReference(entry.model, entry.variant)}`)
+        log.info(`  ${agent} -> ${formatDisplayName(entry.model)}${entry.variant ? `#${entry.variant}` : ""}`)
       if (dryRun) log.warn("dry run: nothing saved")
       else {
         assigner.apply(assignments)
@@ -128,7 +121,7 @@ Options:
       }
       log.header(dryRun ? "assign set (dry run)" : "assign set")
       for (const [agent, { model, variant }] of Object.entries(patch))
-        log.info(`  ${agent} -> ${formatDisplayReference(model, variant)}`)
+        log.info(`  ${agent} -> ${formatDisplayName(model)}${variant ? `#${variant}` : ""}`)
       if (dryRun) log.warn("dry run: nothing saved")
       else {
         assigner.applyExplicit(patch)
@@ -137,7 +130,7 @@ Options:
     } else if (subcommand === "show") {
       const assigner = new AgentAssigner(loadConfig(configPath))
       for (const { agent, model, variant } of assigner.currentAssignments())
-        log.info(`  ${agent} -> ${model ? formatDisplayReference(model, variant) : "(unset)"}`)
+        log.info(`  ${agent} -> ${model ? `${formatDisplayName(model)}${variant ? `#${variant}` : ""}` : "(unset)"}`)
     } else throw new TypeError(`unknown assign subcommand: ${subcommand}`)
   } else throw new TypeError(`unknown command: ${command}`)
 }

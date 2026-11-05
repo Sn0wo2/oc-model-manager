@@ -3,7 +3,7 @@ import { confirm, input, password } from "@inquirer/prompts"
 import { AGENTS, AgentAssigner } from "./agent/assign.ts"
 import { defaultConfigPath, loadConfig, saveConfig } from "./config/io.ts"
 import { fail, log } from "./config/log.ts"
-import { formatDisplayName, formatDisplayReference, formatReference, sortedByName } from "./model/display.ts"
+import { formatDisplayName, sortedByName } from "./model/display.ts"
 import { FORMAT_KEYS, packageForFormat, SDK_FORMATS } from "./provider/formats.ts"
 import { ModelSync } from "./provider/sync.ts"
 import { announce, menu, pick, promptGlobalContext } from "./utils/console.ts"
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
         const format =
           FORMAT_KEYS[
             await menu(
-              FORMAT_KEYS.map((format) => SDK_FORMATS[format].description),
+              FORMAT_KEYS.map((key) => SDK_FORMATS[key].description),
               "select API format",
             )
           ]
@@ -61,13 +61,10 @@ async function main(): Promise<void> {
           })
         ).trim()
         const sync = new ModelSync(configPath)
-        const credentials = {
-          ...(baseURL ? { baseURL } : {}),
-          ...(apiKey ? { apiKey } : {}),
-        }
+        const credentials = { baseURL, apiKey }
         const discovered = await sync.fetchModelIds(name, {
           package: packageForFormat(format),
-          settings: credentials as Record<string, string>,
+          settings: credentials,
         })
         if (!discovered) break
         const selection = await pick(sortedByName(discovered), `select models for ${name}`)
@@ -150,12 +147,11 @@ async function main(): Promise<void> {
       case 4: {
         const config = loadConfig(configPath)
         const assigner = new AgentAssigner(config)
-        const agents = Object.keys(AGENTS).sort((left, right) => {
-          const leftSub = config.agents?.[left]?.mode === "subagent" ? 1 : 0
-          const rightSub = config.agents?.[right]?.mode === "subagent" ? 1 : 0
-          if (leftSub !== rightSub) return leftSub - rightSub
-          return formatDisplayName(left).localeCompare(formatDisplayName(right), undefined, { sensitivity: "base" })
-        })
+        const agents = Object.keys(AGENTS).sort(
+          (left, right) =>
+            Number(config.agents?.[left]?.mode === "subagent") - Number(config.agents?.[right]?.mode === "subagent") ||
+            formatDisplayName(left).localeCompare(formatDisplayName(right), undefined, { sensitivity: "base" }),
+        )
         const selectedAgents = await pick(agents, "select agents (comma-separated)")
         if (!selectedAgents.length) {
           log.warn("no agents selected")
@@ -169,7 +165,11 @@ async function main(): Promise<void> {
         if (!model) break
         const variants = assigner.scorer.variants(model)
         const variant = variants.length ? variants[await menu(variants, "thinking variant", -1, "default")] : undefined
-        announce(["assign", "set", ...selectedAgents.map((agent) => `${agent}=${formatReference(model, variant)}`)])
+        announce([
+          "assign",
+          "set",
+          ...selectedAgents.map((agent) => `${agent}=${model}${variant ? `#${variant}` : ""}`),
+        ])
         if (!(await confirm({ message: "apply?", default: true }))) break
         assigner.applyExplicit(
           Object.fromEntries(selectedAgents.map((agent) => [agent, { model, variant: variant ?? undefined }])),
@@ -180,7 +180,7 @@ async function main(): Promise<void> {
       case 5:
         announce(["assign", "show"])
         for (const { agent, model, variant } of new AgentAssigner(loadConfig(configPath)).currentAssignments())
-          log.info(`  ${agent} -> ${model ? formatDisplayReference(model, variant) : "(unset)"}`)
+          log.info(`  ${agent} -> ${model ? `${formatDisplayName(model)}${variant ? `#${variant}` : ""}` : "(unset)"}`)
         break
       default:
         return
