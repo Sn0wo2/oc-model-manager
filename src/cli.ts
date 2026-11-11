@@ -1,18 +1,15 @@
-import { parseArgs as parseNodeArgs } from "node:util"
-import { AgentAssigner } from "./agent/assign.ts"
-import { defaultConfigPath, loadConfig, saveConfig } from "./config/io.ts"
-import { fail, log } from "./config/log.ts"
-import { formatDisplayName, parseReference } from "./model/display.ts"
-import { FORMAT_KEYS } from "./provider/formats.ts"
+import { parseArgs } from "node:util"
+import { defaultConfigPath } from "./config/io.ts"
+import { FORMAT_KEYS, parseFormat } from "./provider/formats.ts"
 import { ModelSync } from "./provider/sync.ts"
-
 import { parsePositiveInteger, splitList } from "./utils/input.ts"
+import { log } from "./utils/log.ts"
 
-async function main(): Promise<void> {
+async function main() {
   const {
     values: flags,
     positionals: [command = "", ...positional],
-  } = parseNodeArgs({
+  } = parseArgs({
     args: Bun.argv.slice(2),
     allowPositionals: true,
     options: {
@@ -23,18 +20,16 @@ async function main(): Promise<void> {
       "api-key": { type: "string" },
       models: { type: "string" },
       context: { type: "string" },
-      providers: { type: "string" },
-      variant: { type: "string", multiple: true },
-      "dry-run": { type: "boolean" },
     },
   })
   const configPath = flags.config || defaultConfigPath()
   if (flags.help === true || !command) {
     console.log(`Usage: bun run cli <command> [options]
 
-Provider commands:
   add <name> --format <key> [--base-url <url>] [--api-key <key>] [--models <a,b,...>] [--context <tokens>]
       add a provider from an API endpoint (all discovered models by default)
+  edit <name> [--format <key>] [--base-url <url>] [--api-key <key>]
+      update provider settings without changing models (empty value clears a setting)
   sync [<name>...] [--models <a,b,...>] [--context <tokens>]
       re-sync API model lists (all providers when no name given)
       --context applies to all selected models
@@ -42,14 +37,6 @@ Provider commands:
       remove a provider from the config
   list
       list configured providers
-
-Agent assignment:
-  assign auto [--providers <a,b,...>] [--variant <model>=<level>...] [--dry-run]
-      score candidates, auto-zone them and assign agents
-  assign set <agent>=<provider/model[#variant]>... [--dry-run]
-      explicitly set agent models
-  assign show
-      print current agent assignments
 
 Options:
   --config <path>   config file (default: ${defaultConfigPath()})
@@ -59,8 +46,8 @@ Options:
   if (command === "add") {
     const name = positional[0]
     if (!name) throw new TypeError("add requires a provider name")
-    const format = FORMAT_KEYS.find((key) => key === flags.format)
-    if (!format) throw new TypeError(`missing or unknown --format: ${flags.format} (valid: ${FORMAT_KEYS.join(", ")})`)
+    const format = parseFormat(flags.format)
+    if (!format) throw new TypeError(`add requires --format (${FORMAT_KEYS.join(", ")})`)
     await new ModelSync(configPath).addProvider(
       name,
       format,
@@ -68,6 +55,14 @@ Options:
       splitList(flags.models),
       parsePositiveInteger(flags.context, "--context"),
     )
+  } else if (command === "edit") {
+    const name = positional[0]
+    if (!name) throw new TypeError("edit requires a provider name")
+    new ModelSync(configPath).editProvider(name, {
+      format: parseFormat(flags.format),
+      baseURL: flags["base-url"],
+      apiKey: flags["api-key"],
+    })
   } else if (command === "sync") {
     await new ModelSync(configPath).syncProviders(
       positional,
@@ -81,62 +76,13 @@ Options:
   } else if (command === "list") {
     const providers = new ModelSync(configPath).listProviders()
     if (!providers.length) log.warn("no providers configured")
-    for (const provider of providers) log.info(`  ${provider.name} [${provider.format}] ${provider.models} models`)
-  } else if (command === "assign") {
-    const subcommand = positional.shift()
-    if (subcommand === "auto") {
-      const dryRun = flags["dry-run"] === true
-      const config = loadConfig(configPath)
-      const assigner = new AgentAssigner(config)
-      const models = (splitList(flags.providers) ?? [...assigner.scorer.providers.keys()]).flatMap(
-        (name) => assigner.scorer.providers.get(name) ?? [],
-      )
-      if (!models.length) throw new TypeError("no models found for selection")
-      const overrides: Record<string, string> = {}
-      for (const value of flags.variant ?? []) {
-        const [model, variant] = value.split("=")
-        if (!(model && variant)) throw new TypeError(`--variant expects <model>=<level>, got: ${value}`)
-        overrides[model] = variant
-      }
-      const assignments = assigner.autoAssign(models, overrides)
-      const patch = assigner.buildAgentPatch(assignments)
-      log.header(dryRun ? "assign auto (dry run)" : "assign auto")
-      for (const [agent, entry] of Object.entries(patch))
-        log.info(`  ${agent} -> ${formatDisplayName(entry.model)}${entry.variant ? `#${entry.variant}` : ""}`)
-      if (dryRun) log.warn("dry run: nothing saved")
-      else {
-        assigner.apply(assignments)
-        saveConfig(configPath, config)
-      }
-    } else if (subcommand === "set") {
-      const dryRun = flags["dry-run"] === true
-      const config = loadConfig(configPath)
-      const assigner = new AgentAssigner(config)
-      const patch: Record<string, { model: string; variant?: string | undefined }> = {}
-      for (const entry of positional) {
-        const [agent, reference] = entry.split("=")
-        if (!(agent && reference?.includes("/")))
-          throw new TypeError(`expected <agent>=<provider/model[#variant]>, got: ${entry}`)
-        patch[agent] = parseReference(reference)
-      }
-      log.header(dryRun ? "assign set (dry run)" : "assign set")
-      for (const [agent, { model, variant }] of Object.entries(patch))
-        log.info(`  ${agent} -> ${formatDisplayName(model)}${variant ? `#${variant}` : ""}`)
-      if (dryRun) log.warn("dry run: nothing saved")
-      else {
-        assigner.applyExplicit(patch)
-        saveConfig(configPath, config)
-      }
-    } else if (subcommand === "show") {
-      const assigner = new AgentAssigner(loadConfig(configPath))
-      for (const { agent, model, variant } of assigner.currentAssignments())
-        log.info(`  ${agent} -> ${model ? `${formatDisplayName(model)}${variant ? `#${variant}` : ""}` : "(unset)"}`)
-    } else throw new TypeError(`unknown assign subcommand: ${subcommand}`)
+    for (const provider of providers) log.info(`  ${provider.name} [${provider.package}] ${provider.models} models`)
   } else throw new TypeError(`unknown command: ${command}`)
 }
 
 try {
   await main()
 } catch (error) {
-  fail(error)
+  log.error(error instanceof Error ? error.message : String(error))
+  process.exit(1)
 }

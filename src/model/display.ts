@@ -1,26 +1,26 @@
-const BRAND_NAMES: Readonly<Record<string, string>> = {
+import { compact } from "es-toolkit/array"
+import { memoize } from "es-toolkit/function"
+import { upperFirst } from "es-toolkit/string"
+
+const BRAND_NAMES: Record<string, string> = {
   openai: "OpenAI",
   deepseek: "DeepSeek",
   minimax: "MiniMax",
 }
+const BRAND_SEPARATOR = /[-_]/g
 const ACRONYM_PATTERN = /^(?:api|ai|gpt|glm|llm|sdk|url|mcp)$/
 const STARTS_WITH_DIGIT = /^\d/
 const HAS_UPPERCASE_AFTER_FIRST = /[A-Z]/
 const HAS_LOWERCASE = /[a-z]/
-const displayNameCache = new Map<string, string>()
+const collator = new Intl.Collator(undefined, { sensitivity: "base" })
 
-export function formatDisplayName(rawId: string): string {
-  const cached = displayNameCache.get(rawId)
-  if (cached !== undefined) return cached
-  const displayName = rawId
+export const formatDisplayName = memoize((rawId: string) =>
+  rawId
     .split("/")
     .map(
       (segment) =>
-        BRAND_NAMES[segment.toLowerCase().replaceAll("-", "").replaceAll("_", "")] ??
-        segment
-          .replaceAll("_", "-")
-          .split("-")
-          .filter(Boolean)
+        BRAND_NAMES[segment.toLowerCase().replaceAll(BRAND_SEPARATOR, "")] ??
+        compact(segment.split(BRAND_SEPARATOR))
           .map((word) => {
             const lower = word.toLowerCase()
             if (BRAND_NAMES[lower]) return BRAND_NAMES[lower]
@@ -31,24 +31,13 @@ export function formatDisplayName(rawId: string): string {
               (HAS_UPPERCASE_AFTER_FIRST.test(word.slice(1)) && HAS_LOWERCASE.test(word))
             )
               return word
-            return word.charAt(0).toUpperCase() + word.slice(1)
+            return upperFirst(word)
           })
           .join("-"),
     )
-    .join(" ")
-  displayNameCache.set(rawId, displayName)
-  return displayName
-}
+    .join(" "),
+)
 
 export function sortedByName(items: Iterable<string>): string[] {
-  return [...items].sort((left, right) =>
-    formatDisplayName(left).localeCompare(formatDisplayName(right), undefined, {
-      sensitivity: "base",
-    }),
-  )
-}
-
-export function parseReference(ref: string) {
-  const [model, variant] = ref.split("#")
-  return { model: model ?? "", variant: variant || undefined }
+  return [...items].sort((left, right) => collator.compare(formatDisplayName(left), formatDisplayName(right)))
 }

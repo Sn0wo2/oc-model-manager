@@ -6,8 +6,3 @@ export const log = {
   run: (message: string) => console.log(`[>] ${message}`),
   header: (message: string) => console.log(`\n=== ${message} ===`),
 }
-
-export function fail(error: unknown): never {
-  log.error(error instanceof Error ? error.message : String(error))
-  process.exit(1)
-}

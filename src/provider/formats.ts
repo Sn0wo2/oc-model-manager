@@ -54,8 +54,17 @@ export const SDK_FORMATS = {
 
 export type FormatKey = keyof typeof SDK_FORMATS
 
-export function packageForFormat(format: FormatKey): string {
-  return `aisdk:${SDK_FORMATS[format].package}`
+export const FORMAT_KEYS = Object.keys(SDK_FORMATS) as FormatKey[]
+
+const AISDK_PREFIX = /^aisdk:/
+
+export function parsePackage(value: string | undefined) {
+  return value?.replace(AISDK_PREFIX, "")
 }
 
-export const FORMAT_KEYS = Object.keys(SDK_FORMATS) as FormatKey[]
+export function parseFormat(value?: string) {
+  if (value === undefined) return
+  const format = FORMAT_KEYS.find((key) => key === value)
+  if (!format) throw new TypeError(`unknown --format: ${value} (valid: ${FORMAT_KEYS.join(", ")})`)
+  return format
+}

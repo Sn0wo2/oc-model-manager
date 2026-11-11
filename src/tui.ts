@@ -1,33 +1,76 @@
-import { parseArgs as parseNodeArgs } from "node:util"
-import { confirm, input, password } from "@inquirer/prompts"
-import { AGENTS, AgentAssigner } from "./agent/assign.ts"
-import { defaultConfigPath, loadConfig, saveConfig } from "./config/io.ts"
-import { fail, log } from "./config/log.ts"
-import { formatDisplayName, sortedByName } from "./model/display.ts"
-import { FORMAT_KEYS, packageForFormat, SDK_FORMATS } from "./provider/formats.ts"
+import { parseArgs } from "node:util"
+import { input, password } from "@inquirer/prompts"
+import { defaultConfigPath } from "./config/io.ts"
+import { sortedByName } from "./model/display.ts"
+import { FORMAT_KEYS, parsePackage, SDK_FORMATS } from "./provider/formats.ts"
 import { ModelSync } from "./provider/sync.ts"
-import { announce, menu, pick, promptGlobalContext } from "./utils/console.ts"
+import { menu, pick } from "./utils/console.ts"
+import { log } from "./utils/log.ts"
 
-const { values: flags } = parseNodeArgs({
+const { values: flags } = parseArgs({
   args: Bun.argv.slice(2),
   options: { config: { type: "string" } },
 })
 const configPath = flags.config || defaultConfigPath()
 
-async function main(): Promise<void> {
+async function promptGlobalContext() {
+  const rawContext = await input({
+    message: "context for all selected models (tokens; blank leaves unchanged):",
+    validate: (value) =>
+      !value.trim() ||
+      (Number.isSafeInteger(Number(value)) && Number(value) > 0) ||
+      "Enter a positive integer or leave blank",
+  })
+  return rawContext.trim() ? Number(rawContext) : undefined
+}
+
+async function editProvider() {
+  const sync = new ModelSync(configPath)
+  const names = sync.listProviders().map(({ name }) => name)
+  if (!names.length) {
+    log.warn("no providers configured")
+    return
+  }
+  const name = names[await menu(names, "select provider")]
+  if (!name) return
+  const provider = sync.config.providers?.[name]
+  if (!provider) return
+  const { baseURL } = provider.settings ?? {}
+  const currentURL = typeof baseURL === "string" ? baseURL : ""
+  const currentFormat = parsePackage(provider.package) ?? "unknown"
+  const format =
+    FORMAT_KEYS[
+      await menu(
+        FORMAT_KEYS.map((key) => SDK_FORMATS[key].description),
+        `select API format (current: ${currentFormat})`,
+      )
+    ]
+  const nextURL = (
+    await input({
+      message: `baseURL${currentURL ? ` [${currentURL}]` : ""} (blank keeps current; - clears):`,
+    })
+  ).trim()
+  const nextKey = (
+    await password({
+      message: "apiKey (blank keeps current unless format changes; - clears):",
+      mask: "*",
+      toggleMask: false,
+    })
+  ).trim()
+  if (format === undefined && !nextURL && !nextKey) return
+  sync.editProvider(name, {
+    format,
+    baseURL: nextURL === "-" ? "" : nextURL || undefined,
+    apiKey: nextKey === "-" ? "" : nextKey || undefined,
+  })
+}
+
+async function main() {
   if (!process.stdin.isTTY) throw new Error("interactive terminal required")
   while (true) {
     log.header("opencode config manager")
     const action = await menu(
-      [
-        "add provider",
-        "sync providers",
-        "remove provider",
-        "list providers",
-        "assign agents (manual)",
-        "show assignments",
-        "exit",
-      ],
+      ["add provider", "sync providers", "remove provider", "list providers", "edit provider", "exit"],
       "select action",
       1,
     )
@@ -63,7 +106,7 @@ async function main(): Promise<void> {
         const sync = new ModelSync(configPath)
         const credentials = { baseURL, apiKey }
         const discovered = await sync.fetchModelIds(name, {
-          package: packageForFormat(format),
+          package: `aisdk:${SDK_FORMATS[format].package}`,
           settings: credentials,
         })
         if (!discovered) break
@@ -73,17 +116,6 @@ async function main(): Promise<void> {
           break
         }
         const context = await promptGlobalContext()
-        announce([
-          "add",
-          name,
-          "--format",
-          format,
-          ...(baseURL && baseURL !== defaultURL ? ["--base-url", baseURL] : []),
-          ...(apiKey ? ["--api-key", apiKey] : []),
-          "--models",
-          selection.join(","),
-          ...(context === undefined ? [] : ["--context", String(context)]),
-        ])
         await sync.addProvider(name, format, credentials, selection, context)
         break
       }
@@ -116,12 +148,6 @@ async function main(): Promise<void> {
           }
         }
         const context = await promptGlobalContext()
-        announce([
-          "sync",
-          ...selected,
-          ...(selection ? ["--models", selection.join(",")] : []),
-          ...(context === undefined ? [] : ["--context", String(context)]),
-        ])
         await sync.syncProviders(selected, selection, context)
         break
       }
@@ -132,55 +158,16 @@ async function main(): Promise<void> {
           log.warn("no providers configured")
           break
         }
-        const name = names[await menu(names, "select provider to delete", -1, "cancel")]
-        if (name) {
-          announce(["remove", name])
-          sync.deleteProvider(name)
-        }
+        const name = names[await menu(names, "select provider to delete")]
+        if (name) sync.deleteProvider(name)
         break
       }
       case 3:
-        announce(["list"])
         for (const provider of new ModelSync(configPath).listProviders())
-          log.info(`  ${provider.name} [${provider.format}] ${provider.models} models`)
+          log.info(`  ${provider.name} [${provider.package}] ${provider.models} models`)
         break
-      case 4: {
-        const config = loadConfig(configPath)
-        const assigner = new AgentAssigner(config)
-        const agents = Object.keys(AGENTS).sort(
-          (left, right) =>
-            Number(config.agents?.[left]?.mode === "subagent") - Number(config.agents?.[right]?.mode === "subagent") ||
-            formatDisplayName(left).localeCompare(formatDisplayName(right), undefined, { sensitivity: "base" }),
-        )
-        const selectedAgents = await pick(agents, "select agents (comma-separated)")
-        if (!selectedAgents.length) {
-          log.warn("no agents selected")
-          break
-        }
-        const providerNames = sortedByName([...assigner.scorer.providers.keys()])
-        const provider = providerNames[await menu(providerNames, "select provider")]
-        if (!provider) break
-        const models = sortedByName(assigner.scorer.providers.get(provider) ?? [])
-        const model = models[await menu(models, "select model")]
-        if (!model) break
-        const variants = assigner.scorer.variants(model)
-        const variant = variants.length ? variants[await menu(variants, "thinking variant", -1, "default")] : undefined
-        announce([
-          "assign",
-          "set",
-          ...selectedAgents.map((agent) => `${agent}=${model}${variant ? `#${variant}` : ""}`),
-        ])
-        if (!(await confirm({ message: "apply?", default: true }))) break
-        assigner.applyExplicit(
-          Object.fromEntries(selectedAgents.map((agent) => [agent, { model, variant: variant ?? undefined }])),
-        )
-        saveConfig(configPath, config)
-        break
-      }
-      case 5:
-        announce(["assign", "show"])
-        for (const { agent, model, variant } of new AgentAssigner(loadConfig(configPath)).currentAssignments())
-          log.info(`  ${agent} -> ${model ? `${formatDisplayName(model)}${variant ? `#${variant}` : ""}` : "(unset)"}`)
+      case 4:
+        await editProvider()
         break
       default:
         return
@@ -192,5 +179,6 @@ try {
   await main()
 } catch (error) {
   if (error instanceof Error && error.name === "ExitPromptError") process.exit(0)
-  fail(error)
+  log.error(error instanceof Error ? error.message : String(error))
+  process.exit(1)
 }

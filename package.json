@@ -2,6 +2,17 @@
   "name": "oc-model-manager",
   "version": "0.1.0",
   "private": true,
+  "description": "Manage OpenCode2 providers and agent model assignments",
+  "keywords": [
+    "opencode",
+    "opencode2",
+    "opencode-plugin",
+    "opencode2-plugin"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sn0wo2/oc-model-manager.git"
+  },
   "type": "module",
   "packageManager": "bun@1.4.4",
   "scripts": {
@@ -15,8 +26,10 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^8.7.5",
+    "atomically": "^2.1.1",
     "es-toolkit": "^1.53.1",
     "jsonc-parser": "^3.3.1",
+    "ofetch": "^1.5.1",
     "zod": "^4.6.7"
   },
   "devDependencies": {

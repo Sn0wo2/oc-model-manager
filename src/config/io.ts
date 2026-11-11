@@ -1,32 +1,32 @@
-import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, join } from "node:path"
-import { isPlainObject as isRecord } from "es-toolkit/predicate"
+import { join } from "node:path"
+import { writeFileSync } from "atomically"
+import { isEqual, isPlainObject } from "es-toolkit/predicate"
 import { applyEdits, modify, type ParseError, parse } from "jsonc-parser"
 import { z } from "zod"
-import { log } from "./log.ts"
+import { log } from "../utils/log.ts"
 import { type OpenCodeConfig, openCodeConfigSchema } from "./schema.ts"
 
-export function defaultConfigPath(): string {
-  const globalDirectory =
-    process.env["OPENCODE_CONFIG_DIR"]?.trim() ||
-    join(process.env["XDG_CONFIG_HOME"]?.trim() || join(homedir(), ".config"), "opencode")
-  const fallbackPath = join(globalDirectory, "opencode.jsonc")
-  const candidates = [join(globalDirectory, "opencode.json"), fallbackPath]
-  return candidates.filter((path) => existsSync(path)).at(-1) ?? fallbackPath
+export function defaultConfigPath() {
+  const { OPENCODE_CONFIG_DIR, XDG_CONFIG_HOME } = process.env
+  const directory =
+    OPENCODE_CONFIG_DIR?.trim() || join(XDG_CONFIG_HOME?.trim() || join(homedir(), ".config"), "opencode")
+  const fallback = join(directory, "opencode.jsonc")
+  const json = join(directory, "opencode.json")
+  return existsSync(json) && !existsSync(fallback) ? json : fallback
 }
 
 function parseConfig(text: string, source: string): Record<string, unknown> {
   const errors: ParseError[] = []
   const config: unknown = parse(text, errors, { allowTrailingComma: true })
-  const first = errors[0]
+  const [first] = errors
   if (first) throw new SyntaxError(`${source}: JSONC syntax error near offset ${first.offset} (code ${first.error})`)
-  if (!isRecord(config)) throw new TypeError(`${source} must be an object`)
+  if (!isPlainObject(config)) throw new TypeError(`${source} must be an object`)
   return config
 }
 
-export function loadConfig(configPath: string): OpenCodeConfig {
+export function loadConfig(configPath: string) {
   if (!existsSync(configPath)) return {}
   const document = parseConfig(readFileSync(configPath, "utf8"), configPath)
   const parsed = openCodeConfigSchema.safeParse(document)
@@ -34,35 +34,22 @@ export function loadConfig(configPath: string): OpenCodeConfig {
   return parsed.data
 }
 
-export function saveConfig(configPath: string, config: OpenCodeConfig): void {
+export function saveConfig(configPath: string, config: OpenCodeConfig) {
   const original = existsSync(configPath) ? readFileSync(configPath, "utf8") : null
   let text = JSON.stringify(config, null, 2)
   if (original !== null) {
     const previous = parseConfig(original, configPath)
     text = original
     for (const key of new Set([...Object.keys(previous), ...Object.keys(config)])) {
-      const exists = key in config
-      const value = exists ? config[key] : undefined
-      if (exists && JSON.stringify(previous[key]) === JSON.stringify(value)) continue
+      if (key in config && isEqual(previous[key], config[key])) continue
       text = applyEdits(
         text,
-        modify(text, [key], value, {
+        modify(text, [key], key in config ? config[key] : undefined, {
           formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" },
         }),
       )
     }
   }
-  const directory = dirname(configPath)
-  if (!existsSync(directory)) mkdirSync(directory, { recursive: true })
-  const temporary = join(directory, `.tmp-${randomUUID()}`)
-  try {
-    writeFileSync(temporary, text, {
-      encoding: "utf8",
-      mode: 0o600,
-    })
-    renameSync(temporary, configPath)
-  } finally {
-    rmSync(temporary, { force: true })
-  }
+  writeFileSync(configPath, text, { encoding: "utf8", mode: 0o600 })
   log.ok(`saved to ${configPath}`)
 }

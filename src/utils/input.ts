@@ -1,9 +1,8 @@
+import { compact } from "es-toolkit/array"
+
 export function splitList(value?: string) {
-  const items = value
-    ?.split(",")
-    .map((item) => item.trim())
-    .filter(Boolean)
-  return items?.length ? items : undefined
+  const items = compact(value?.split(",").map((item) => item.trim()) ?? [])
+  return items.length ? items : undefined
 }
 
 export function parsePositiveInteger(value: string | undefined, option: string) {
